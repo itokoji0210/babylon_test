@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Babylon.js 3DGS スクロール・テリング（PLY / .splat / .spz）</title>
+  <style>
+    :root{ --bg:#0b0f14; --fg:#e9f0f7; --line:#182332; --accent:#00c2ff; }
+    html,body{ height:100%; margin:0; background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", Meiryo, sans-serif; }
+    header{ position:sticky; top:0; z-index:20; display:flex; align-items:center; gap:.6rem; padding:.6rem .8rem; background:#0d131c; border-bottom:1px solid var(--line); }
+    header h1{ font-size:14px; margin:0; color:#cfe8ff; font-weight:600 }
+    .spacer{ flex:1 }
+    .btn{ display:inline-flex; align-items:center; gap:.4rem; padding:.45rem .7rem; border-radius:999px; border:1px solid #223046; background:#0f1826; color:#cfe8ff; cursor:pointer; font-size:13px }
+    .btn:hover{ background:#132036 }
+    input[type="file"]{ display:none }
+    .layout{ display:grid; grid-template-columns: minmax(320px, 480px) 1fr; height: calc(100svh - 50px); }
+    .story{ height:100%; overflow:auto; border-right:1px solid var(--line); }
+    .panel{ min-height:92svh; padding:10svh 16px; border-bottom:1px dashed var(--line); display:flex; flex-direction:column; justify-content:center; gap:12px }
+    .panel h2{ margin:0; font-size:22px; color:#e7f6ff }
+    .panel p{ margin:0; line-height:1.7; color:#c7d5e2 }
+    .stage{ position:relative }
+    #view{ position:absolute; inset:0 }
+    .hud{ position:absolute; right:12px; bottom:12px; display:flex; flex-direction:column; gap:.5rem; z-index:10 }
+    .chip{ background:#0f1824; border:1px solid #223046; padding:.35rem .6rem; border-radius:999px; font-size:12px; color:#cfe8ff }
+    .legend{ position:absolute; left:12px; bottom:12px; display:flex; gap:.5rem; align-items:center }
+    .range{ appearance:none; width:220px; height:6px; border-radius:999px; background:#122236; border:1px solid #243043 }
+    .range::-webkit-slider-thumb{ appearance:none; width:16px; height:16px; border-radius:50%; background:var(--accent); border:2px solid #bbeaff }
+    .drop{ position:absolute; inset:0; display:none; place-items:center; border:2px dashed #2a3b4f; color:#b7d9ff; background:#0a0f16cc; font-size:14px; z-index:30 }
+    .drop.show{ display:grid }
+    @media (max-width: 980px){ .layout{ grid-template-columns: 1fr; grid-template-rows: 45svh 55svh } .story{ order:2 } .stage{ order:1; min-height:45svh } }
+  </style>
+  <!-- Babylon.js v8 UMD（本体＋ローダー） -->
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Babylon.js 3DGS ビューワ（スクロール・テリング）</h1>
+    <div class="spacer"></div>
+    <label class="btn" title="ローカルの3DGSファイルを読み込む（.ply / .splat / .spz）">
+      <input id="file" type="file" accept=".ply,.splat,.spz" />ファイルを開く
+    </label>
+    <button id="fit" class="btn">全体表示</button>
+  </header>
+
+  <div class="layout">
+    <aside class="story" id="story">
+      <!-- data-camera は ArcRotate の alpha,beta,radius,targetXYZ とアニメ時間ms -->
+      <section class="panel" data-camera="a:-0.6;b:1.0;r:3.2;tx:0;ty:0;tz:0;dur:1000">
+        <h2>① 導入</h2>
+        <p>左の原稿をスクロールすると、右のBabylonシーンの視点が切り替わります。3DGSは <code>.ply</code> / <code>.splat</code> / <code>.spz</code> に対応（ブラウザGLメモリに注意）。</p>
+      </section>
+      <section class="panel" data-camera="a:0.8;b:1.05;r:2.2;tx:0;ty:0;tz:0;dur:1200">
+        <h2>② ディテール</h2>
+        <p>露出やコントラストは右下のコントロールで微調整できます。スマホでも動作。</p>
+      </section>
+      <section class="panel" data-camera="a:1.7;b:1.2;r:3.8;tx:0;ty:0;tz:0;dur:1200">
+        <h2>③ 俯瞰</h2>
+        <p>キーフレーム間の秒数とパネルの高さを合わせると、SuperSplat同様の“読みと動きの一致感”が出ます。</p>
+      </section>
+      <section class="panel" data-camera="a:2.7;b:1.1;r:2.0;tx:0.05;ty:0.02;tz:-0.03;dur:1200">
+        <h2>④ まとめ</h2>
+        <p>GitHub Pagesにこの1ファイルを置くだけで公開可能です。ArcGIS StoryMapsへの埋め込みも簡単。</p>
+      </section>
+    </aside>
+
+    <main class="stage">
+      <canvas id="view"></canvas>
+      <div class="hud">
+        <div class="chip" id="status">読み込み待機中</div>
+      </div>
+      <div class="legend">
+        <span style="font-size:12px;opacity:.9">露出</span>
+        <input id="exp" class="range" type="range" min="0.6" max="1.6" step="0.02" value="1.0"/>
+        <span style="font-size:12px;opacity:.9">コントラスト</span>
+        <input id="con" class="range" type="range" min="0.8" max="1.4" step="0.02" value="1.0"/>
+      </div>
+      <div class="drop" id="droplabel">.ply / .splat / .spz をドロップ</div>
+    </main>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('view');
+    const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer:false, stencil:false, doNotHandleContextLost:true });
+    const scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color4(0,0,0,0);
+
+    // 画像処理（露出・コントラスト）
+    scene.imageProcessingConfiguration.toneMappingEnabled = true;
+    const ip = scene.imageProcessingConfiguration;
+
+    // カメラ（ArcRotate）
+    const camera = new BABYLON.ArcRotateCamera('cam', -0.6, 1.0, 3.0, new BABYLON.Vector3(0,0,0), scene);
+    camera.attachControl(canvas, true);
+    camera.wheelPrecision = 60;      // ズーム感度
+    camera.minZ = 0.001;             // 近クリップ
+    camera.lowerRadiusLimit = 0.3;
+
+    // 最小限のライト（GSはエミッシブ表現でライト依存は薄い）
+    const hemi = new BABYLON.HemisphericLight('h', new BABYLON.Vector3(0,1,0), scene);
+    hemi.intensity = 0.4;
+
+    // 現在のGSメッシュ参照
+    let gsMesh = null;
+
+    function setStatus(t){ document.getElementById('status').textContent = t; }
+
+    // ------- GSファイルの読み込み（URL or File） -------
+    async function loadGSfromURL(url){
+      setStatus('読み込み中…');
+      // 既存メッシュのクリーンアップ
+      if(gsMesh){ gsMesh.dispose(); gsMesh = null; }
+      // SceneLoader: Babylon v8 では Gaussian Splatting の各形式をローダーが処理
+      const res = await BABYLON.SceneLoader.ImportMeshAsync(null, '', url, scene);
+      // 先頭を採用（複数返る場合あり）
+      const m = res.meshes.find(x=>x instanceof BABYLON.GaussianSplattingMesh) || res.meshes[0];
+      gsMesh = m; fitView();
+      setStatus('読み込み完了');
+    }
+
+    async function loadGSfromFile(file){
+      const blobURL = URL.createObjectURL(file);
+      try{ await loadGSfromURL(blobURL); }
+      finally{ URL.revokeObjectURL(blobURL); }
+    }
+
+    // ------- ビューフィット（原点想定。GSのバウンディングから半径推定） -------
+    function fitView(){
+      if(!gsMesh) return;
+      const b = gsMesh.getBoundingInfo().boundingSphere;
+      const r = Math.max(0.8, b.radiusWorld);
+      camera.setTarget(b.centerWorld);
+      camera.radius = r * 2.6;
+    }
+
+    document.getElementById('fit').addEventListener('click', fitView);
+
+    // ------- スクロール・テリング（セクション→カメラ補間） -------
+    function parseSpec(el){
+      const q = Object.fromEntries((el.dataset.camera||'').split(';').map(s=>s.split(':')));
+      const a = parseFloat(q.a ?? camera.alpha), b = parseFloat(q.b ?? camera.beta), r = parseFloat(q.r ?? camera.radius);
+      const tx = parseFloat(q.tx ?? 0), ty = parseFloat(q.ty ?? 0), tz = parseFloat(q.tz ?? 0);
+      const dur = parseInt(q.dur ?? 1000, 10);
+      return { a,b,r,target:new BABYLON.Vector3(tx,ty,tz), dur };
+    }
+
+    let animKey = 0;
+    function animateCam(to){
+      animKey++;
+      const my = animKey;
+      const a0=camera.alpha, b0=camera.beta, r0=camera.radius, t0=camera.target.clone();
+      const tStart = performance.now();
+      const ease = t=> t<.5? 2*t*t : -1+(4-2*t)*t;
+      const step = (now)=>{
+        if(my!==animKey) return;
+        const k = Math.min(1, (now - tStart) / to.dur);
+        const e = ease(k);
+        camera.alpha  = a0 + (to.a - a0)*e;
+        camera.beta   = b0 + (to.b - b0)*e;
+        camera.radius = r0 + (to.r - r0)*e;
+        const tgt = BABYLON.Vector3.Lerp(t0, to.target, e);
+        camera.setTarget(tgt);
+        if(k<1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    }
+
+    const story = document.getElementById('story');
+    const io = new IntersectionObserver((ents)=>{
+      for(const en of ents){ if(en.isIntersecting){ animateCam(parseSpec(en.target)); } }
+    }, { root: story, threshold: .6 });
+    document.querySelectorAll('.panel').forEach(p=>io.observe(p));
+
+    // ------- 露出・コントラスト UI -------
+    const exp = document.getElementById('exp');
+    const con = document.getElementById('con');
+    exp.addEventListener('input', ()=>{ ip.exposure = parseFloat(exp.value); });
+    con.addEventListener('input', ()=>{ ip.contrast = parseFloat(con.value); });
+
+    // ------- ファイル入力＆D&D -------
+    const input = document.getElementById('file');
+    input.addEventListener('change', e=>{ const f=e.target.files?.[0]; if(f) loadGSfromFile(f); });
+
+    const drop = document.getElementById('droplabel');
+    ['dragenter','dragover'].forEach(ev=>{ canvas.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.add('show'); }); });
+    ['dragleave','drop'].forEach(ev=>{ canvas.addEventListener(ev, e=>{ e.preventDefault(); drop.classList.remove('show'); }); });
+    canvas.addEventListener('drop', e=>{ const f=e.dataTransfer.files?.[0]; if(f) loadGSfromFile(f); });
+
+    // ------- URL パラメータ（?src=）で外部モデル読込（CORS対応サーバのみ） -------
+    const u = new URL(location.href); const src = u.searchParams.get('src'); if(src) loadGSfromURL(src).catch(err=>setStatus('読込エラー: '+err.message));
+
+    // ------- ループ -------
+    engine.runRenderLoop(()=>{ scene.render(); });
+    addEventListener('resize', ()=>engine.resize());
+
+    setStatus('ファイルをドラッグ＆ドロップ、または「ファイルを開く」');
+  </script>
+</body>
+</html>
